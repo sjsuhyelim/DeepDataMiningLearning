@@ -8,7 +8,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
-
+from torchvision import transforms as transforms
 INSTANCE_Color = {
     'Unknown':'black', 'Vehicles':'red', 'Pedestrians':'green', 'Cyclists':'purple'
 }#'Unknown', 'Vehicles', 'Pedestrians', 'Cyclists'
@@ -212,8 +212,151 @@ def show_imagewithscore_bbxyxy(image, pred_bbox, pred_ids, pred_score, title, IN
     if savefigname is not None:
         fig.savefig(savefigname)
     
-    #fig.savefig(f"output/test_frame_{i}.png", dpi=fig.dpi)
-#     plt.show()
+def show_image_bbxyxy(image, 
+                    pred_bbox, 
+                    pred_ids, 
+                    class_dic, 
+                    prob, 
+                    detection_threshold, 
+                    title, 
+                    savefigname=None):
+    """Show a camera image and the given camera labels.
+        Do not draw bboxes that have lower than detection threshold 
+    """
+        
+    fig, ax = plt.subplots(1, 1, figsize=(20, 15))
+    boxnum=len(pred_bbox)
+    pred_bbox = [[(i[0], i[1]), (i[2], i[3])] for i in pred_bbox]
+    #print(boxnum)
+    if len(pred_ids)<1:
+        print("No object detected")
+        return image
+    else:
+        
+        #print(pred_labels)
+        for i in range(boxnum):#patch in pred_bbox:
+            if prob[i] > detection_threshold:
+                patch=pred_bbox[i]
+                #print(patch)
+                colorlabel=compute_color_for_labels(pred_ids[i]) #INSTANCE_Color[label]
+                #print(colorlabel)#RGB value 0-255
+                colorlabelnormalized = [float(i)/255 for i in colorlabel] #0-1
+                label=class_dic[pred_ids[i]]
+                #print(label)
+                ax.add_patch(Rectangle(
+                xy=patch[0],#(patch[0], patch[1]), #xmin ymin
+                width=patch[1][0]-patch[0][0],#patch[2] - patch[0],
+                height=patch[1][1]-patch[0][1],#patch[3] - patch[1],
+                linewidth=4,
+                edgecolor=colorlabelnormalized,#"red",
+                facecolor='none'))
+                ax.text(patch[0][0]-5, patch[0][1]-5, label, color=colorlabelnormalized, fontsize=15)
+            else:
+                continue
+        
+    ax.imshow(image)
+    
+    ax.title.set_text(title)
+    ax.grid(False)
+    ax.axis('off')
+    
+    if savefigname is not None:
+        fig.savefig(savefigname)
+
+def resize(im, img_size=640, square=False):
+    """
+    https://github.com/sovit-123/fasterrcnn-pytorch-training-pipeline/blob/main/inference_video.py
+    """
+    # Aspect ratio resize
+    if square:
+        im = cv2.resize(im, (img_size, img_size))
+    else:
+        h0, w0 = im.shape[:2]  # orig hw
+        r = img_size / max(h0, w0)  # ratio
+        if r != 1:  # if sizes are not equal
+            im = cv2.resize(im, (int(w0 * r), int(h0 * r)))
+    return im
+
+def infer_transforms(image):
+    """
+    https://github.com/sovit-123/fasterrcnn-pytorch-training-pipeline/blob/main/inference_video.py
+    """
+    # Define the torchvision image transforms.
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.ToTensor(),
+    ])
+    return transform(image)
+
+def convert_detections(outputs, detection_threshold, class_dic):
+    """
+    reference: https://github.com/sovit-123/fasterrcnn-pytorch-training-pipeline/blob/main/inference_video.py
+    Return the bounding boxes, scores, and classes.
+    """
+    boxes = outputs[0]['boxes'].data.numpy()
+    labels = outputs[0]['labels'].data.numpy()
+    scores = outputs[0]['scores'].data.numpy()
+
+    # Filter out boxes according to `detection_threshold`.
+    boxes = boxes[scores >= detection_threshold].astype(np.int32)
+    draw_boxes = boxes.copy()
+    # Get all the predicited class names.
+    pred_classes = [class_dic[i] for i in outputs[0]['labels'].cpu().numpy()]
+
+    return draw_boxes, pred_classes, scores, labels
+
+def inference_annotations(draw_boxes, pred_classes, scores, labels, classes, colors, orig_image, image):
+    """
+    https://github.com/sovit-123/fasterrcnn-pytorch-training-pipeline/blob/main/inference_video.py
+    """
+    height, width, _ = orig_image.shape
+    lw = max(round(sum(orig_image.shape) / 2 * 0.003), 2)  # Line width.
+    tf = max(lw - 1, 1) # Font thickness.
+    
+    # Draw the bounding boxes and write the class name on top of it.
+    for j, box in enumerate(draw_boxes):
+        p1 = (int(box[0]/image.shape[1]*width), int(box[1]/image.shape[0]*height))
+        p2 = (int(box[2]/image.shape[1]*width), int(box[3]/image.shape[0]*height))
+        class_name = pred_classes[j]
+
+        color = colors[labels[j]]
+        cv2.rectangle(
+            orig_image,
+            p1, p2,
+            color=color, 
+            thickness=lw,
+            lineType=cv2.LINE_AA
+        )
+        
+        final_label = class_name + ' ' + str(round(scores[j], 2))
+        w, h = cv2.getTextSize(
+            final_label, 
+            cv2.FONT_HERSHEY_SIMPLEX, 
+            fontScale=lw / 3, 
+            thickness=tf
+        )[0]  # text width, height
+        w = int(w - (0.20 * w))
+        outside = p1[1] - h >= 3
+        p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
+        cv2.rectangle(
+            orig_image, 
+            p1, 
+            p2, 
+            color=color, 
+            thickness=-1, 
+            lineType=cv2.LINE_AA
+        )  
+        cv2.putText(
+            orig_image, 
+            final_label, 
+            (p1[0], p1[1] - 5 if outside else p1[1] + h + 2),
+            cv2.FONT_HERSHEY_SIMPLEX, 
+            fontScale=lw / 3.8, 
+            color=(255, 255, 255), 
+            thickness=tf, 
+            lineType=cv2.LINE_AA
+        )
+    return orig_image
 
 #add from https://github.com/lkk688/myyolov7/blob/main/utils/plots.py
 import matplotlib
