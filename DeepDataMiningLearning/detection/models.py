@@ -369,7 +369,7 @@ def create_detectionmodel(modelname, num_classes, trainable_layers):
     if trainable_layers==0:
         freezemodel = True
     if modelname == 'fasterrcnn_resnet50_fpn_v2':
-        model, preprocess, weights, classes = get_torchvision_detection_models(model)
+        model, preprocess, weights, classes = get_torchvision_detection_models(modelname)
         if len(classes) != num_classes:
             model = modify_fasterrcnnheader(model, num_classes, freeze=freezemodel)
     elif modelname.startswith('customrcnn'):
